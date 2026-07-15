@@ -1,0 +1,897 @@
+<!DOCTYPE html>
+<html lang="zh-TW" class="h-full">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>光合螢光探測器：Fv/Fm 測量模擬</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <!-- SDK scripts -->
+  <script src="/_sdk/element_sdk.js"></script>
+  <script src="/_sdk/data_sdk.js" type="text/javascript"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    * { font-family: 'Noto Sans TC', sans-serif; }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+    
+    @keyframes pulse-glow {
+      0%, 100% { filter: drop-shadow(0 0 8px currentColor); }
+      50% { filter: drop-shadow(0 0 16px currentColor); }
+    }
+    
+    @keyframes leaf-breathe {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.02); }
+    }
+
+    @keyframes flash-screen {
+      0% { background-color: rgba(255, 255, 255, 0.8); }
+      100% { background-color: transparent; }
+    }
+    
+    /* 暫停時強制凍結所有 CSS 動畫 */
+    .paused *, .paused svg {
+      animation-play-state: paused !important;
+    }
+
+    .reaction-center {
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .reaction-center.open {
+      background: #10b981;
+      box-shadow: 0 0 10px #10b981, inset 0 0 5px rgba(0,0,0,0.5);
+      border-color: #34d399;
+    }
+
+    .reaction-center.saturated {
+      background: #ef4444;
+      box-shadow: 0 0 20px #ef4444, inset 0 0 10px rgba(0,0,0,0.5);
+      border-color: #f87171;
+      transform: scale(1.2);
+    }
+    
+    .chart-grid {
+      background-image: 
+        linear-gradient(rgba(100, 200, 150, 0.1) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(100, 200, 150, 0.1) 1px, transparent 1px);
+      background-size: 20px 20px;
+    }
+
+    /* Educational Tooltip */
+    .edu-tooltip {
+      position: relative;
+    }
+    .edu-tooltip .tooltip-text {
+      visibility: hidden;
+      opacity: 0;
+      transition: opacity 0.3s;
+      bottom: 120%;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+    .edu-tooltip:hover .tooltip-text {
+      visibility: visible;
+      opacity: 1;
+    }
+
+    body { box-sizing: border-box; }
+    
+    /* Scrollbar for right panel if needed */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+  </style>
+</head>
+<body class="h-full bg-slate-900 text-slate-200 overflow-hidden flex flex-col">
+  <div id="app" class="w-full h-full flex flex-col">
+    <!-- Header -->
+    <header class="bg-gradient-to-r from-emerald-900 via-teal-900 to-cyan-900 p-3 border-b border-emerald-500/30 shrink-0">
+      <div class="max-w-7xl mx-auto flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 id="main-title" class="text-xl font-bold text-emerald-300">光合螢光探測器：F<sub>v</sub>/F<sub>m</sub> 測量教學</h1>
+          <p class="text-xs text-emerald-400/80 mt-1">了解植物如何處理光能：光合作用 (E<sub>P</sub>) vs 熱耗散 (E<sub>D</sub>) vs 螢光 (E<sub>F</sub>)</p>
+        </div>
+        <div class="flex items-center gap-2 bg-slate-800 p-1 rounded-lg border border-slate-700">
+          <span class="text-xs text-emerald-400 px-2">切換葉片狀態：</span> 
+          <button id="btn-healthy" class="px-3 py-1 text-sm rounded-md bg-emerald-600 text-white font-medium transition-all shadow-md"> 
+            <span id="healthy-text">健康葉片</span> 
+          </button> 
+          <button id="btn-sick" class="px-3 py-1 text-sm rounded-md bg-transparent text-slate-400 hover:text-slate-200 font-medium transition-all"> 
+            <span id="sick-text">受損葉片 (逆境)</span> 
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 p-3 flex flex-col lg:flex-row gap-4 max-w-screen-2xl mx-auto w-full min-h-0 overflow-auto lg:overflow-hidden">
+      
+      <!-- Left: Visual & Chart Panel -->
+      <div class="flex-1 flex flex-col gap-3 min-w-0 min-h-[600px] lg:min-h-0">
+        
+        <!-- Live Status Banner -->
+        <div id="status-banner" class="bg-slate-800 rounded-xl border-l-4 border-slate-500 p-3 shadow-lg transition-all duration-300 shrink-0">
+          <div class="flex items-start gap-3">
+            <div id="status-icon" class="text-2xl mt-0.5">🌙</div>
+            <div>
+              <h3 id="status-title" class="font-bold text-slate-300">目前狀態：暗適應 (Dark-adapted)</h3>
+              <p id="status-desc" class="text-sm text-slate-400 mt-1">葉片處於黑暗中，所有光系統 II (PSII) 的反應中心都處於「開放」狀態，準備好接收光能。</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Particle Animation Canvas -->
+        <div class="bg-slate-800/50 rounded-2xl border border-emerald-500/20 flex-1 relative overflow-hidden flex flex-col min-h-[300px]">
+          <div class="absolute inset-0 z-0 pointer-events-none" id="flash-overlay"></div>
+          
+          <div class="flex items-center justify-between p-2 px-3 z-10 bg-slate-900/60 backdrop-blur-sm border-b border-white/5">
+            <h2 class="text-sm font-medium text-emerald-400">葉片內部能量流動模擬</h2>
+            <div class="flex gap-4 text-xs font-medium">
+              <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-blue-400 shadow-[0_0_8px_#60a5fa]"></span>激發光子</span> 
+              <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]"></span>光化學反應</span> 
+              <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-orange-400 shadow-[0_0_8px_#fb923c]"></span>熱耗散</span> 
+              <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_8px_#ef4444]"></span>螢光釋放</span>
+            </div>
+          </div>
+          
+          <div class="relative flex-1 bg-gradient-to-b from-slate-900 to-slate-800 overflow-hidden">
+            <canvas id="particle-canvas" class="absolute inset-0 w-full h-full z-10"></canvas>
+            
+            <!-- Leaf SVG Overlay (右下角) -->
+            <svg id="leaf-svg" class="absolute bottom-4 right-4 md:bottom-8 md:right-12 w-64 h-32 md:h-40 z-20 pointer-events-none origin-bottom-right" viewBox="0 0 200 120" style="animation: leaf-breathe 4s ease-in-out infinite;">
+              <defs>
+                <linearGradient id="leaf-gradient-healthy" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#10b981" />
+                  <stop offset="100%" stop-color="#047857" />
+                </linearGradient>
+                <linearGradient id="leaf-gradient-sick" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#84cc16" />
+                  <stop offset="50%" stop-color="#a3a323" />
+                  <stop offset="100%" stop-color="#78350f" />
+                </linearGradient>
+                <filter id="glow"><feGaussianBlur stdDeviation="3" result="coloredBlur"/><feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+              </defs> 
+              <path id="leaf-path" d="M100 10 C140 10, 180 40, 190 80 C190 100, 160 110, 100 110 C40 110, 10 100, 10 80 C20 40, 60 10, 100 10 Z" fill="url(#leaf-gradient-healthy)" stroke="#064e3b" stroke-width="2" filter="url(#glow)"/> 
+              <line x1="100" y1="20" x2="100" y2="105" stroke="#064e3b" stroke-width="2" opacity="0.6" /> 
+              <path d="M100 40 Q130 50, 150 70" stroke="#064e3b" stroke-width="1.5" fill="none" opacity="0.5" /> 
+              <path d="M100 40 Q70 50, 50 70" stroke="#064e3b" stroke-width="1.5" fill="none" opacity="0.5" /> 
+              <path d="M100 60 Q125 68, 140 85" stroke="#064e3b" stroke-width="1.5" fill="none" opacity="0.5" /> 
+              <path d="M100 60 Q75 68, 60 85" stroke="#064e3b" stroke-width="1.5" fill="none" opacity="0.5" />
+            </svg>
+
+            <!-- Reaction Centers UI (與葉片對齊) -->
+            <div class="absolute bottom-[75px] md:bottom-[95px] right-[45px] md:right-[75px] flex flex-col items-center z-20">
+              <div id="reaction-centers" class="flex gap-3 md:gap-4">
+                <div class="flex flex-col items-center gap-1">
+                  <div class="reaction-center open w-6 h-6 rounded-full border-2"><span class="text-[10px]">O</span></div>
+                </div>
+                <div class="flex flex-col items-center gap-1">
+                  <div class="reaction-center open w-6 h-6 rounded-full border-2"><span class="text-[10px]">O</span></div>
+                </div>
+                <div class="flex flex-col items-center gap-1">
+                  <div class="reaction-center open w-6 h-6 rounded-full border-2"><span class="text-[10px]">O</span></div>
+                </div>
+                <div class="flex flex-col items-center gap-1">
+                  <div class="reaction-center open w-6 h-6 rounded-full border-2"><span class="text-[10px]">O</span></div>
+                </div>
+                <div class="flex flex-col items-center gap-1">
+                  <div class="reaction-center open w-6 h-6 rounded-full border-2"><span class="text-[10px]">O</span></div>
+                </div>
+              </div>
+              <div class="mt-2 text-center text-[10px] text-slate-300 font-medium pointer-events-none drop-shadow-md">
+                PSII 反應中心 (Reaction Centers)
+              </div>
+            </div>
+
+            <!-- Light Source Indicator (左上角) -->
+            <div id="light-source" class="absolute top-4 md:top-8 left-6 md:left-12 text-center z-20">
+              <div id="light-indicator" class="w-14 h-14 md:w-16 md:h-16 mx-auto rounded-full bg-slate-800 border-2 border-slate-600 flex items-center justify-center transition-all duration-300">
+                <span id="light-icon" class="text-2xl md:text-3xl opacity-50">🔦</span>
+              </div>
+              <p id="light-label" class="text-xs md:text-sm font-medium text-slate-500 mt-2 bg-slate-900/60 px-3 py-1 rounded-full backdrop-blur-sm">光源：關閉</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Real-time Chart -->
+        <div class="bg-slate-800/50 rounded-2xl border border-emerald-500/20 p-3 shrink-0 h-[220px] flex flex-col">
+          <div class="flex items-center justify-between mb-2">
+            <h2 class="text-sm font-medium text-emerald-400">即時螢光動力學曲線 (Kinetics)</h2>
+            <div class="edu-tooltip cursor-help text-slate-400 hover:text-emerald-300">
+              <span>ℹ️ 解說</span>
+              <div class="tooltip-text absolute w-48 p-2 bg-slate-700 text-xs text-white rounded shadow-xl border border-slate-600 z-30 mb-2">
+                圖表顯示螢光強度隨時間的變化。Fv (可變螢光) = Fm - F0。
+              </div>
+            </div>
+          </div>
+          <div class="chart-grid bg-slate-900/80 rounded-xl p-2 flex-1 relative border border-slate-700">
+            <canvas id="chart-canvas" class="absolute inset-0 w-full h-full"></canvas>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Right: Controls & Data Panel -->
+      <div class="w-full lg:w-[400px] flex flex-col gap-3 shrink-0 overflow-y-auto pr-1">
+        
+        <!-- Measurement Workflow (Controls) -->
+        <div class="bg-slate-800/80 rounded-2xl border border-emerald-500/30 p-4 shadow-lg shrink-0">
+          <div class="flex justify-between items-center mb-4">
+            <h2 class="text-lg font-bold text-emerald-400">測量流程控制</h2>
+            <div class="flex gap-2">
+              <button id="btn-pause" class="p-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm transition-colors" title="暫停/繼續"><span id="pause-icon">⏸️</span></button>
+              <button id="btn-reset" class="p-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm transition-colors text-red-400" title="重置實驗">🔄</button>
+            </div>
+          </div>
+          
+          <div class="space-y-3">
+            <!-- Step 1 -->
+            <div class="bg-slate-900/80 rounded-xl p-3 border-l-4 border-blue-500 hover:bg-slate-800 transition-colors shadow-inner">
+              <div class="flex items-center justify-between mb-2">
+                <div class="flex items-center gap-2">
+                  <span class="bg-blue-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">Step 1</span>
+                  <h3 class="font-bold text-blue-300 text-sm">測量基礎螢光 (F<sub>0</sub>)</h3>
+                </div>
+                <button id="btn-weak" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-bold text-white shadow-lg shadow-blue-500/20 transition-transform active:scale-95 shrink-0">
+                  啟動弱光
+                </button>
+              </div>
+              <p class="text-[11px] text-slate-400 leading-relaxed">發射微弱測量光。光能幾乎都被吸收，漏出的螢光量最低 (F<sub>0</sub>)。</p>
+            </div>
+
+            <!-- Step 2 -->
+            <div class="bg-slate-900/80 rounded-xl p-3 border-l-4 border-amber-500 hover:bg-slate-800 transition-colors opacity-50 pointer-events-none transition-all duration-500 shadow-inner" id="step-2-container">
+              <div class="flex items-center justify-between mb-2">
+                <div class="flex items-center gap-2">
+                  <span class="bg-amber-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">Step 2</span>
+                  <h3 class="font-bold text-amber-300 text-sm">測量最大螢光 (F<sub>m</sub>)</h3>
+                </div>
+                <button id="btn-strong" class="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 rounded-lg text-sm font-bold text-slate-900 shadow-lg shadow-amber-500/20 transition-transform active:scale-95 shrink-0">
+                  打強脈衝光
+                </button>
+              </div>
+              <p class="text-[11px] text-slate-400 leading-relaxed">瞬間打出超強光。反應中心飽和關閉，釋出最大量螢光 (F<sub>m</sub>)。</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Calculation & Results -->
+        <div class="bg-slate-800/50 rounded-2xl border border-emerald-500/20 p-4 shrink-0 flex flex-col">
+          <h2 class="text-sm font-medium text-emerald-400 mb-3 flex items-center gap-2">
+            📊 測量結果分析
+          </h2>
+          
+          <div class="grid grid-cols-3 gap-2 text-center mb-4">
+            <div class="bg-slate-900/80 rounded-xl p-2 border border-slate-700/50">
+              <p class="text-[10px] text-slate-400 mb-1">基礎螢光 F<sub>0</sub></p>
+              <p id="val-f0" class="mono text-lg font-bold text-blue-400">---</p>
+            </div>
+            <div class="bg-slate-900/80 rounded-xl p-2 border border-slate-700/50">
+              <p class="text-[10px] text-slate-400 mb-1">最大螢光 F<sub>m</sub></p>
+              <p id="val-fm" class="mono text-lg font-bold text-amber-400">---</p>
+            </div>
+            <div class="bg-slate-900/80 rounded-xl p-2 border border-emerald-900 bg-emerald-900/30">
+              <p class="text-[10px] text-emerald-400/80 mb-1 font-bold">量子產率 F<sub>v</sub>/F<sub>m</sub></p>
+              <p id="val-fvfm" class="mono text-xl font-bold text-emerald-400 drop-shadow-[0_0_8px_rgba(52,211,153,0.5)]">---</p>
+            </div>
+          </div>
+
+          <div class="space-y-3 border-t border-slate-700/50 pt-3">
+            <div class="flex justify-between items-center mb-1">
+              <h3 class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">即時能量分配比例</h3>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="text-xs w-16 text-emerald-400">E<sub>P</sub> 光合</span>
+              <div class="flex-1 h-3 bg-slate-900 rounded-full overflow-hidden border border-slate-700">
+                <div id="bar-ep" class="h-full bg-emerald-500 transition-all duration-300" style="width: 0%"></div>
+              </div>
+              <span id="pct-ep" class="mono text-xs w-10 text-right">0%</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="text-xs w-16 text-orange-400">E<sub>D</sub> 熱耗</span>
+              <div class="flex-1 h-3 bg-slate-900 rounded-full overflow-hidden border border-slate-700">
+                <div id="bar-ed" class="h-full bg-orange-500 transition-all duration-300" style="width: 0%"></div>
+              </div>
+              <span id="pct-ed" class="mono text-xs w-10 text-right">0%</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="text-xs w-16 text-red-500 font-bold">E<sub>F</sub> 螢光</span>
+              <div class="flex-1 h-3 bg-slate-900 rounded-full overflow-hidden border border-slate-700">
+                <div id="bar-ef" class="h-full bg-red-500 transition-all duration-300 shadow-[0_0_10px_#ef4444]" style="width: 0%"></div>
+              </div>
+              <span id="pct-ef" class="mono text-xs w-10 text-right font-bold text-red-400">0%</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </main>
+  </div>
+
+  <script>
+    // System Config & State
+    const defaultConfig = {
+      main_title: '光合螢光探測器：Fv/Fm 測量教學',
+      healthy_label: '健康葉片',
+      sick_label: '受損葉片 (逆境)'
+    };
+
+    let isHealthy = true;
+    let isRunning = false;
+    let isPaused = false;
+    let isSaturated = false;
+    let state = 'IDLE'; 
+    
+    // Frame Counters for robust pausing
+    let pulseFrames = 0;
+    let weakFrames = 0;
+
+    let particles = [];
+    let chartData = [];
+    let currentF = 0;
+    let f0Value = null;
+    let fmValue = null;
+    let animationId = null;
+    let chartAnimationId = null;
+
+    // Biology Logic Constants
+    const leafParams = {
+      healthy: { photosynthesis: 0.80, heatDissipation: 0.15, fluorescence: 0.05, f0: 120, fm: 780 },
+      sick: { photosynthesis: 0.25, heatDissipation: 0.40, fluorescence: 0.35, f0: 380, fm: 550 }
+    };
+
+    // UI Elements
+    const particleCanvas = document.getElementById('particle-canvas');
+    const particleCtx = particleCanvas.getContext('2d');
+    const chartCanvas = document.getElementById('chart-canvas');
+    const chartCtx = chartCanvas.getContext('2d');
+    const reactionCentersContainer = document.getElementById('reaction-centers');
+    
+    const statusBanner = document.getElementById('status-banner');
+    const statusIcon = document.getElementById('status-icon');
+    const statusTitle = document.getElementById('status-title');
+    const statusDesc = document.getElementById('status-desc');
+
+    function resizeCanvases() {
+      if (!particleCanvas.parentElement || !chartCanvas.parentElement) return;
+      
+      const rect1 = particleCanvas.parentElement.getBoundingClientRect();
+      particleCanvas.width = rect1.width;
+      particleCanvas.height = rect1.height;
+      
+      const rect2 = chartCanvas.parentElement.getBoundingClientRect();
+      chartCanvas.width = rect2.width * 2; 
+      chartCanvas.height = rect2.height * 2;
+    }
+
+    // Modern Particle System with Trails
+    class Particle {
+      constructor(startX, startY, type, targetY, targetX = 0) {
+        this.x = startX;
+        this.y = startY;
+        this.type = type; 
+        
+        const speedMultiplier = isSaturated ? 2.5 : 1;
+        
+        if (type === 'incident') {
+            const dx = targetX - startX;
+            const dy = targetY - startY;
+            // 真實直線距離計算，避免因為 Y 座標提早滿足而瞬間爆發
+            this.targetDist = Math.sqrt(dx*dx + dy*dy) || 1;
+            this.travelled = 0;
+            
+            const speed = (4 + Math.random() * 2) * speedMultiplier;
+            
+            // 計算對角線飛行的速度向量
+            this.vx = (dx / this.targetDist) * speed + (Math.random() - 0.5) * 1.5;
+            this.vy = (dy / this.targetDist) * speed + (Math.random() - 0.5) * 1.5;
+            
+            this.actualSpeed = Math.sqrt(this.vx*this.vx + this.vy*this.vy);
+        } else {
+            this.vx = (Math.random() - 0.5) * 3 * speedMultiplier;
+            this.vy = (3 + Math.random() * 3) * speedMultiplier;
+            this.targetDist = 0;
+            this.travelled = 0;
+            this.actualSpeed = 0;
+        }
+        
+        this.radius = type === 'incident' ? 3 : 2;
+        this.alpha = 1;
+        this.transformed = false;
+        this.emitted = false;
+        
+        this.history = [];
+      }
+
+      update(params, canvasHeight, canvasWidth) {
+        this.history.push({x: this.x, y: this.y});
+        if (this.history.length > 8) this.history.shift();
+
+        if (this.type === 'incident') {
+          this.y += this.vy;
+          this.x += this.vx; 
+          this.travelled += this.actualSpeed;
+          
+          // 使用「實際飛行距離」來判斷是否到達目標，不再依賴單純的 Y 座標
+          if (this.travelled >= this.targetDist && !this.transformed) {
+            this.transformed = true;
+            const rand = Math.random();
+            
+            const adjustedParams = isSaturated 
+              ? { photosynthesis: 0.02, heatDissipation: params.heatDissipation + (params.photosynthesis/2), fluorescence: params.fluorescence + (params.photosynthesis/2) - 0.02 }
+              : params;
+            
+            if (rand < adjustedParams.photosynthesis) {
+              this.type = 'photosynthesis';
+              this.vy = 0; 
+              this.vx = 0;
+              this.alpha = 0;
+            } else if (rand < adjustedParams.photosynthesis + adjustedParams.heatDissipation) {
+              this.type = 'heat';
+              // 往左上方反彈 (因為光源在左上，葉片在右下)
+              this.vy = -1.5 - Math.random() * 2;
+              this.vx = -1.5 - Math.random() * 2;
+            } else {
+              this.type = 'fluorescence';
+              // 往左上方劇烈反彈
+              this.vy = -3 - Math.random() * 3;
+              this.vx = -3 - Math.random() * 3;
+              this.emitted = true;
+            }
+          }
+        } else {
+          this.y += this.vy;
+          this.x += this.vx;
+          if (this.type === 'heat') {
+             this.alpha -= 0.03; 
+          } else {
+             this.alpha -= 0.015; 
+          }
+        }
+        
+        return this.alpha > 0 && this.y > -100 && this.y < canvasHeight + 100 && this.x > -100 && this.x < canvasWidth + 100;
+      }
+
+      draw(ctx) {
+        if (this.alpha <= 0) return;
+
+        let rgb;
+        switch(this.type) {
+          case 'incident': rgb = '96, 165, 250'; break; 
+          case 'photosynthesis': rgb = '52, 211, 153'; break; 
+          case 'heat': rgb = '251, 146, 60'; break; 
+          case 'fluorescence': rgb = '239, 68, 68'; break; 
+        }
+
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        if (this.history.length > 1) {
+          ctx.beginPath();
+          ctx.moveTo(this.history[0].x, this.history[0].y);
+          for(let i=1; i<this.history.length; i++) {
+            ctx.lineTo(this.history[i].x, this.history[i].y);
+          }
+          ctx.strokeStyle = `rgba(${rgb}, ${this.alpha * 0.5})`;
+          ctx.lineWidth = this.radius * 1.5;
+          ctx.shadowBlur = this.type === 'fluorescence' ? 10 : 5;
+          ctx.shadowColor = `rgb(${rgb})`;
+          ctx.stroke();
+        }
+
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.fillStyle = `rgb(${rgb})`;
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = `rgb(${rgb})`;
+        ctx.fill();
+        ctx.shadowBlur = 0; 
+      }
+    }
+
+    // Core Animation Loop
+    function animate() {
+      const params = isHealthy ? leafParams.healthy : leafParams.sick;
+      const canvasHeight = particleCanvas.height;
+      const canvasWidth = particleCanvas.width;
+      
+      const rcRect = reactionCentersContainer.getBoundingClientRect();
+      const canvasRect = particleCanvas.getBoundingClientRect();
+      const targetY = canvasRect.height > 0 ? (rcRect.top - canvasRect.top) * (particleCanvas.height / canvasRect.height) : canvasHeight - 100;
+      
+      particleCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+      
+      if (isRunning && !isPaused) {
+
+        if (state === 'WEAK_WAIT') {
+          weakFrames++;
+          if (weakFrames >= 150) { 
+            f0Value = params.f0 + (Math.random() - 0.5) * 10;
+            document.getElementById('val-f0').textContent = Math.round(f0Value);
+            updateStateUI('WEAK_DONE');
+          }
+        }
+
+        if (isSaturated) {
+          pulseFrames++;
+          if (pulseFrames >= 48) { 
+            isSaturated = false;
+            pulseFrames = 0;
+            
+            const newFm = params.fm + (Math.random() - 0.5) * 20;
+            fmValue = fmValue !== null ? Math.max(fmValue, newFm) : newFm;
+            document.getElementById('val-fm').textContent = Math.round(fmValue);
+
+            const fvfm = (fmValue - f0Value) / fmValue;
+            document.getElementById('val-fvfm').textContent = fvfm.toFixed(3);
+
+            updateStateUI('DONE');
+          }
+        }
+
+        // 動態計算光源與反應中心的位置，讓粒子知道如何斜向飛行
+        const lightInd = document.getElementById('light-indicator');
+        const lightRect = lightInd.getBoundingClientRect();
+        const lightX = canvasRect.width > 0 ? (lightRect.left + lightRect.width / 2 - canvasRect.left) * (particleCanvas.width / canvasRect.width) : 100;
+        // 光源中心稍微往下偏移作為發射點
+        const lightY = canvasRect.height > 0 ? (lightRect.bottom - canvasRect.top - 10) * (particleCanvas.height / canvasRect.height) : 50;
+        
+        const rcX = canvasRect.width > 0 ? (rcRect.left + rcRect.width / 2 - canvasRect.left) * (particleCanvas.width / canvasRect.width) : canvasWidth - 100;
+
+        const spawnRate = isSaturated ? 1.0 : 0.15;
+        const spawnCount = isSaturated ? Math.floor(Math.random() * 12) + 8 : (Math.random() < spawnRate ? 1 : 0);
+        
+        for(let i=0; i<spawnCount; i++) {
+          const sourceSpread = isSaturated ? 40 : 15;
+          const startX = lightX + (Math.random() - 0.5) * sourceSpread;
+          const startY = lightY + (Math.random() - 0.5) * 10;
+          
+          const targetSpread = rcRect.width || 120;
+          const destX = rcX + (Math.random() - 0.5) * targetSpread;
+          
+          particles.push(new Particle(startX, startY, 'incident', targetY, destX));
+        }
+      
+        particles = particles.filter(p => {
+          const alive = p.update(params, canvasHeight, canvasWidth);
+          if (alive) p.draw(particleCtx);
+          return alive;
+        });
+      
+        const redParticles = particles.filter(p => p.type === 'fluorescence' && p.emitted).length;
+        const baseF = isSaturated ? params.fm : params.f0;
+        
+        if (isSaturated) {
+           currentF += (baseF - currentF) * 0.2;
+        } else {
+           currentF += (baseF - currentF) * 0.05;
+        }
+        
+        const noise = (Math.random() - 0.5) * (isSaturated ? 30 : 10);
+        currentF = Math.max(10, Math.min(950, currentF + noise));
+
+      } else {
+        particles.forEach(p => p.draw(particleCtx));
+        if (!isRunning) currentF = 0;
+      }
+      
+      animationId = requestAnimationFrame(animate);
+    }
+
+    // Chart Renderer (High DPI)
+    function animateChart() {
+      const ctx = chartCtx;
+      const width = chartCanvas.width;
+      const height = chartCanvas.height;
+      const padding = 50;
+      
+      ctx.clearRect(0, 0, width, height);
+      
+      if (isRunning && !isPaused) {
+        chartData.push(currentF);
+        const maxPoints = Math.floor(width / 2); 
+        if (chartData.length > maxPoints) chartData.shift();
+      }
+      
+      ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for(let i=1; i<4; i++) {
+        let hLine = (height - padding) - (i/4) * (height - padding);
+        ctx.moveTo(padding, hLine); ctx.lineTo(width, hLine);
+      }
+      ctx.stroke();
+
+      ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(padding, 0); ctx.lineTo(padding, height - padding); 
+      ctx.lineTo(width, height - padding); 
+      ctx.stroke();
+
+      ctx.fillStyle = '#64748b';
+      ctx.font = '22px "JetBrains Mono"';
+      ctx.fillText('0', 15, height - padding + 8);
+      ctx.fillText('Time', width - 70, height - 10);
+      
+      if (chartData.length > 1) {
+        ctx.beginPath();
+        const step = (width - padding) / Math.max(chartData.length, Math.floor(width/2));
+        
+        chartData.forEach((val, i) => {
+          const x = padding + (i * step);
+          const y = (height - padding) - (val / 1000) * (height - padding);
+          
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        
+        ctx.strokeStyle = '#10b981';
+        ctx.lineWidth = 5;
+        ctx.lineJoin = 'round';
+        ctx.shadowColor = '#10b981';
+        ctx.shadowBlur = 12;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        
+        const drawRefLine = (val, color, label) => {
+          const y = (height - padding) - (val / 1000) * (height - padding);
+          ctx.beginPath();
+          ctx.setLineDash([10, 10]);
+          ctx.moveTo(padding, y);
+          ctx.lineTo(width, y);
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          ctx.setLineDash([]);
+          
+          ctx.fillStyle = color;
+          ctx.font = 'bold 26px "JetBrains Mono"';
+          ctx.fillText(label, width - 60, y - 10);
+        };
+
+        if (f0Value !== null) drawRefLine(f0Value, '#60a5fa', 'F0');
+        if (fmValue !== null) drawRefLine(fmValue, '#fbbf24', 'Fm');
+      }
+      
+      chartAnimationId = requestAnimationFrame(animateChart);
+    }
+
+    // UI Updates
+    function updateStateUI(newState) {
+      state = newState;
+      const step2Container = document.getElementById('step-2-container');
+      const btnWeak = document.getElementById('btn-weak');
+      const btnStrong = document.getElementById('btn-strong');
+      const lightInd = document.getElementById('light-indicator');
+      const lightIcon = document.getElementById('light-icon');
+      const lightLabel = document.getElementById('light-label');
+
+      const centers = document.querySelectorAll('.reaction-center');
+      centers.forEach(c => {
+        if (isSaturated) {
+          c.className = 'reaction-center saturated w-6 h-6 rounded-full border-2 text-white font-bold flex items-center justify-center';
+          c.innerHTML = '<span class="text-[12px]">X</span>';
+        } else {
+          c.className = `reaction-center open w-6 h-6 rounded-full border-2 text-white font-bold flex items-center justify-center ${isHealthy ? 'border-emerald-300' : 'border-lime-500 !bg-lime-600'}`;
+          c.innerHTML = '<span class="text-[10px]">O</span>';
+        }
+      });
+
+      const params = isHealthy ? leafParams.healthy : leafParams.sick;
+      const adjParams = isSaturated 
+        ? { photosynthesis: 0.02, heatDissipation: params.heatDissipation, fluorescence: 0.98 - params.heatDissipation }
+        : params;
+      
+      document.getElementById('bar-ep').style.width = isRunning ? `${adjParams.photosynthesis * 100}%` : '0%';
+      document.getElementById('bar-ed').style.width = isRunning ? `${adjParams.heatDissipation * 100}%` : '0%';
+      document.getElementById('bar-ef').style.width = isRunning ? `${adjParams.fluorescence * 100}%` : '0%';
+      
+      document.getElementById('pct-ep').textContent = isRunning ? `${Math.round(adjParams.photosynthesis * 100)}%` : '0%';
+      document.getElementById('pct-ed').textContent = isRunning ? `${Math.round(adjParams.heatDissipation * 100)}%` : '0%';
+      document.getElementById('pct-ef').textContent = isRunning ? `${Math.round(adjParams.fluorescence * 100)}%` : '0%';
+
+      statusBanner.className = 'rounded-xl border-l-4 p-3 shadow-lg transition-all duration-300 shrink-0 ';
+      
+      switch(state) {
+        case 'IDLE':
+          statusBanner.classList.add('bg-slate-800', 'border-slate-500');
+          statusIcon.textContent = '🌙';
+          statusTitle.textContent = '目前狀態：暗適應 (Dark-adapted)';
+          statusTitle.className = 'font-bold text-slate-300';
+          statusDesc.textContent = '葉片處於黑暗中，所有光系統 II (PSII) 的反應中心都處於「開放 (O)」狀態，準備好接收光能。請開始 Step 1。';
+          
+          lightInd.style.background = '#1e293b';
+          lightInd.style.boxShadow = 'none';
+          lightIcon.textContent = '🔦';
+          lightIcon.className = 'text-2xl md:text-3xl opacity-30 grayscale';
+          lightLabel.textContent = '光源：關閉';
+          lightLabel.className = 'text-xs md:text-sm font-medium text-slate-500 mt-2 bg-slate-900/60 px-3 py-1 rounded-full backdrop-blur-sm';
+          
+          step2Container.classList.add('opacity-50', 'pointer-events-none');
+          btnWeak.disabled = false;
+          btnWeak.textContent = '啟動弱光';
+          btnStrong.textContent = '打強脈衝光';
+          break;
+
+        case 'WEAK_WAIT':
+          statusBanner.classList.add('bg-blue-900/40', 'border-blue-500');
+          statusIcon.textContent = '🔵';
+          statusTitle.textContent = '目前狀態：弱光照射中，穩定 F0...';
+          statusTitle.className = 'font-bold text-blue-300';
+          statusDesc.textContent = '極微弱的光線不足以讓反應中心關閉。能量大部分被順利引導至光合作用，只會漏出極少量的螢光 (紅色粒子)。';
+          
+          lightInd.style.background = 'linear-gradient(135deg, #1d4ed8, #3b82f6)';
+          lightInd.style.boxShadow = '0 0 30px rgba(59, 130, 246, 0.6)';
+          lightIcon.textContent = '💡';
+          lightIcon.className = 'text-2xl md:text-3xl text-blue-100';
+          lightLabel.textContent = '弱測量光 (Measuring Light)';
+          lightLabel.className = 'text-xs md:text-sm font-bold text-blue-300 mt-2 bg-blue-900/60 px-3 py-1 rounded-full border border-blue-500/30 backdrop-blur-sm';
+          
+          btnWeak.disabled = true;
+          btnWeak.textContent = '測量中...';
+          break;
+
+        case 'WEAK_DONE':
+          statusBanner.classList.add('bg-blue-900/40', 'border-blue-500');
+          statusIcon.textContent = '✅';
+          statusTitle.textContent = '測量完成：取得基礎螢光 (F0)';
+          statusDesc.textContent = '已成功記錄最低螢光值。請進行 Step 2 擊發強脈衝光，測試葉片的最大承受極限。';
+          
+          step2Container.classList.remove('opacity-50', 'pointer-events-none');
+          btnWeak.textContent = '已完成 F0';
+          btnStrong.disabled = false;
+          btnStrong.textContent = '打強脈衝光';
+          break;
+
+        case 'STRONG_PULSE':
+          statusBanner.classList.add('bg-red-900/40', 'border-red-500');
+          statusIcon.textContent = '⚡';
+          statusTitle.textContent = '警告：光飽和！反應中心關閉！';
+          statusTitle.className = 'font-bold text-red-400';
+          statusDesc.textContent = '瞬間湧入過量光子！所有的反應中心被迫變成「關閉 (X)」狀態，拒絕接收能量。無處可去的能量爆發成大量的螢光 (Fm) 與熱能！';
+          
+          lightInd.style.background = 'linear-gradient(135deg, #f59e0b, #fef08a)';
+          lightInd.style.boxShadow = '0 0 60px rgba(253, 224, 71, 1)';
+          lightIcon.textContent = '☀️';
+          lightIcon.className = 'text-3xl md:text-4xl animate-pulse';
+          lightLabel.textContent = '強脈衝光 (Saturating Pulse)!';
+          lightLabel.className = 'text-xs md:text-sm font-bold text-amber-300 mt-2 bg-amber-900/60 px-3 py-1 rounded-full border border-amber-500/50 backdrop-blur-sm animate-pulse';
+          
+          btnStrong.disabled = true;
+          btnStrong.textContent = '激發中...';
+          
+          const flash = document.getElementById('flash-overlay');
+          flash.style.animation = 'none';
+          void flash.offsetWidth; 
+          flash.style.animation = 'flash-screen 1s ease-out';
+          break;
+
+        case 'DONE':
+          let fvfm = (fmValue - f0Value) / fmValue;
+          let diagIcon = fvfm > 0.7 ? '🌿' : (fvfm > 0.5 ? '⚠️' : '❌');
+          let diagColor = fvfm > 0.7 ? 'emerald' : (fvfm > 0.5 ? 'amber' : 'red');
+          
+          statusBanner.className = `rounded-xl border-l-4 p-3 shadow-lg transition-all duration-300 shrink-0 bg-${diagColor}-900/30 border-${diagColor}-500`;
+          statusIcon.textContent = diagIcon;
+          statusTitle.textContent = `實驗完成！分析報告出爐`;
+          statusTitle.className = `font-bold text-${diagColor}-400`;
+          
+          let desc = fvfm > 0.7 
+            ? '高量子產率！這代表大部分的反應中心非常健康，能有效將光能轉換為化學能。您可以多次點擊「再次強脈衝光」觀察反應變化。' 
+            : '產率低下。這表示許多反應中心早已受損，因此能量只能被迫轉為螢光或熱能耗散。您可以多次點擊「再次強脈衝光」觀察反應變化。';
+          statusDesc.textContent = desc;
+
+          lightInd.style.background = 'linear-gradient(135deg, #1d4ed8, #3b82f6)';
+          lightInd.style.boxShadow = '0 0 30px rgba(59, 130, 246, 0.4)';
+          lightIcon.textContent = '💡';
+          lightIcon.className = 'text-2xl md:text-3xl text-blue-100';
+          lightLabel.textContent = '弱測量光 (恢復)';
+          lightLabel.className = 'text-xs md:text-sm font-bold text-blue-300 mt-2 bg-blue-900/60 px-3 py-1 rounded-full border border-blue-500/30 backdrop-blur-sm';
+          
+          btnStrong.disabled = false;
+          btnStrong.textContent = '再次強脈衝光';
+          break;
+      }
+    }
+
+    function updateLeafAppearance() {
+      const leafPath = document.getElementById('leaf-path');
+      leafPath.setAttribute('fill', isHealthy ? 'url(#leaf-gradient-healthy)' : 'url(#leaf-gradient-sick)');
+      
+      const btnH = document.getElementById('btn-healthy');
+      const btnS = document.getElementById('btn-sick');
+      if (isHealthy) {
+        btnH.className = 'px-3 py-1 text-sm rounded-md bg-emerald-600 text-white font-medium transition-all shadow-md';
+        btnS.className = 'px-3 py-1 text-sm rounded-md bg-transparent text-slate-400 hover:text-slate-200 font-medium transition-all';
+      } else {
+        btnH.className = 'px-3 py-1 text-sm rounded-md bg-transparent text-slate-400 hover:text-slate-200 font-medium transition-all';
+        btnS.className = 'px-3 py-1 text-sm rounded-md bg-amber-600 text-white font-medium transition-all shadow-md';
+      }
+    }
+
+    document.getElementById('btn-healthy').addEventListener('click', () => { isHealthy = true; resetMeasurement(); });
+    document.getElementById('btn-sick').addEventListener('click', () => { isHealthy = false; resetMeasurement(); });
+
+    document.getElementById('btn-weak').addEventListener('click', () => {
+      if (isPaused) return; 
+      isRunning = true;
+      isSaturated = false;
+      weakFrames = 0; 
+      updateStateUI('WEAK_WAIT');
+    });
+
+    document.getElementById('btn-strong').addEventListener('click', () => {
+      if (isPaused) return; 
+      if (state !== 'WEAK_DONE' && state !== 'DONE') return; 
+      
+      isSaturated = true;
+      pulseFrames = 0; 
+      updateStateUI('STRONG_PULSE');
+    });
+
+    document.getElementById('btn-pause').addEventListener('click', () => {
+      isPaused = !isPaused;
+      document.getElementById('pause-icon').textContent = isPaused ? '▶️' : '⏸️';
+      document.getElementById('btn-pause').classList.toggle('bg-blue-600');
+      
+      if (isPaused) {
+        document.body.classList.add('paused');
+      } else {
+        document.body.classList.remove('paused');
+      }
+    });
+
+    document.getElementById('btn-reset').addEventListener('click', resetMeasurement);
+
+    function resetMeasurement() {
+      isRunning = false;
+      isPaused = false;
+      isSaturated = false;
+      pulseFrames = 0;
+      weakFrames = 0;
+      particles = [];
+      chartData = [];
+      currentF = 0;
+      f0Value = null;
+      fmValue = null;
+      
+      document.getElementById('val-f0').textContent = '---';
+      document.getElementById('val-fm').textContent = '---';
+      document.getElementById('val-fvfm').textContent = '---';
+      
+      updateLeafAppearance();
+      updateStateUI('IDLE');
+      
+      document.getElementById('pause-icon').textContent = '⏸️';
+      document.getElementById('btn-pause').classList.remove('bg-blue-600');
+      document.body.classList.remove('paused');
+    }
+
+    async function onConfigChange(config) {
+      document.getElementById('main-title').innerHTML = (config.main_title || defaultConfig.main_title).replace('Fv/Fm', 'F<sub>v</sub>/F<sub>m</sub>');
+      document.getElementById('healthy-text').textContent = config.healthy_label || defaultConfig.healthy_label;
+      document.getElementById('sick-text').textContent = config.sick_label || defaultConfig.sick_label;
+    }
+
+    function mapToCapabilities(config) { return { recolorables: [], borderables: [] }; }
+    function mapToEditPanelValues(config) { return new Map([['main_title', config.main_title || defaultConfig.main_title], ['healthy_label', config.healthy_label || defaultConfig.healthy_label], ['sick_label', config.sick_label || defaultConfig.sick_label]]); }
+
+    window.addEventListener('resize', resizeCanvases);
+    if (window.elementSdk) {
+      window.elementSdk.init({ defaultConfig, onConfigChange, mapToCapabilities, mapToEditPanelValues });
+    }
+    
+    updateLeafAppearance();
+    updateStateUI('IDLE');
+    setTimeout(() => {
+      resizeCanvases();
+      animate();
+      animateChart();
+    }, 100);
+  </script>
+</body>
+</html>
